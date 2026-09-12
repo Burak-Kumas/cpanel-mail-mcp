@@ -27,14 +27,16 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
+    "ical.js": "^2.1.0",
     "imapflow": "^1.0.164",
+    "mailparser": "^3.9.26",
     "nodemailer": "^10.0.9",
-    "tsdav": "^2.1.2",
-    "ical.js": "^2.1.0"
+    "tsdav": "^2.1.2"
   },
   "devDependencies": {
-    "@types/nodemailer": "^8.0.1",
+    "@types/mailparser": "^3.4.6",
     "@types/node": "^22.0.0",
+    "@types/nodemailer": "^8.0.1",
     "typescript": "^5.5.0"
   }
 }

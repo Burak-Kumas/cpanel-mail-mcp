@@ -33,14 +33,24 @@ gönderme** yetkisinin tamamıdır — tek bir ihlal tüm ekibin yazışmasını
 
 ## Araçlar
 
-**Mail:** `list_folders`, `list_messages`, `search_messages`, `get_message`,
-`send_message`, `create_draft`
+**Okuma:** `list_folders`, `list_messages`, `search_messages`, `get_message`,
+`list_attachments`, `save_attachment`
+
+**Yazma:** `send_message` (ek dosya destekli), `reply_message` (zincir
+başlıklarını ve alıntıyı korur, `replyAll` destekler), `forward_message`
+(ekleriyle birlikte), `create_draft`
+
+**Düzenleme:** `set_flags` (okundu/yıldız/cevaplandı), `move_message`,
+`archive_message`, `mark_spam`, `trash_message`
+
+**Klasörler:** `create_folder`, `rename_folder`, `delete_folder`, `empty_trash`
 
 **Takvim** (yalnızca `CALDAV_URL` ayarlıysa): `list_calendars`, `list_events`,
-`create_event`
+`create_event`, `update_event`, `delete_event`
 
-**Silme:** `delete_message` yalnızca `ALLOW_DELETE=true` ise açılır (geri
-alınamaz, varsayılan kapalı).
+**Kalıcı silme:** `delete_message` yalnızca `ALLOW_DELETE=true` ise açılır.
+Varsayılan kapalıdır; normal silme `trash_message` ile çöp kutusuna taşır ve
+geri alınabilir. `INBOX` klasörü silinemez.
 
 ## Geliştirme
 
@@ -69,3 +79,10 @@ npm start
 - Masaüstü uygulaması kullanıcının kabuğunu yüklemez, bu yüzden kayıt sırasında
   `node` yerine mutlak yol kullanılır (nvm bir kabuk fonksiyonudur ve masaüstü
   uygulamasında çözülmez).
+- SMTP teslimatı Gönderilenler'e bir şey koymaz; gönderilen mesaj IMAP `APPEND`
+  ile oraya ayrıca yazılır. Mesaj bir kez derlenip hem gönderilir hem
+  kaydedilir, böylece iki kopyanın `Message-ID`'si aynı olur.
+- `raw` ile gönderirken nodemailer alıcıları başlıklardan okumaz; envelope
+  `MailComposer.getEnvelope()` ile ayrıca verilir (Bcc'yi de o taşır).
+- Mesaj gövdeleri `mailparser` ile çözülür; ham kaynaktan başlık kesmek
+  çok parçalı ve base64 kodlu mesajlarda okunaksız çıktı veriyordu.

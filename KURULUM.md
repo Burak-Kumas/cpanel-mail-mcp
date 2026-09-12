@@ -62,14 +62,21 @@ Claude'a sor:
 
 | Ne | Açıklama |
 |---|---|
-| Mail listeleme | Klasörlerdeki son mesajlar |
-| Mail arama | Gönderen, konu, tarih veya içerik |
-| Mail okuma | Tek bir mesajın tamamı |
-| Taslak yazma | Taslaklar'a kaydeder, **göndermez** |
-| Mail gönderme | Senin onayınla gönderir |
-| Takvim | Etkinlikleri görüntüler ve oluşturur |
+| Listeleme & arama | Klasörlerdeki mesajlar; gönderen, konu, tarih veya içerik araması |
+| Okuma | Mesajın tamamı, ekleriyle birlikte |
+| Gönderme | Senin onayınla gönderir, dosya ekleyebilir |
+| Cevaplama | Konu zincirini bozmadan cevaplar, "tümünü yanıtla" destekler |
+| İletme | Ekleriyle birlikte iletir |
+| Taslak | Taslaklar'a kaydeder, **göndermez** |
+| Ekler | Ekleri listeler ve bilgisayarına kaydeder |
+| Düzenleme | Okundu/okunmadı, yıldızlama, arşivleme, spam'e taşıma |
+| Silme | Çöp kutusuna taşır (geri alınabilir) |
+| Klasörler | Oluşturur, yeniden adlandırır, siler |
+| Takvim | Etkinlikleri görüntüler, oluşturur, günceller, siler |
 
-Mail **silme** kapalıdır. Claude yanlışlıkla bir mailini silemez.
+**Güvenlik sınırları:** Silme işlemi maili çöp kutusuna taşır — geri alabilirsin.
+Kalıcı silme varsayılan olarak **kapalıdır**, Claude yanlışlıkla bir maili
+geri dönülmez şekilde silemez. Gelen kutusu klasörü de silinemez.
 
 ---
 

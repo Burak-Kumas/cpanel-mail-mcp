@@ -31,10 +31,13 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { CallToolRequestSchema, ListToolsRequestSchema, } from "@modelcontextprotocol/sdk/types.js";
 import { ImapFlow } from "imapflow";
 import nodemailer from "nodemailer";
-import { fetchCalendars, fetchCalendarObjects, createCalendarObject, getBasicAuthHeaders, } from "tsdav";
+import MailComposer from "nodemailer/lib/mail-composer/index.js";
+import { simpleParser } from "mailparser";
+import { fetchCalendars, fetchCalendarObjects, createCalendarObject, updateCalendarObject, deleteCalendarObject, getBasicAuthHeaders, } from "tsdav";
 import ICAL from "ical.js";
-import { readFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
+import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 // ---------- .env loading ----------
 // Resolved next to the installed server rather than the client's cwd: MCP
@@ -135,19 +138,111 @@ async function withImap(fn) {
         await client.logout().catch(() => { });
     }
 }
-// Prefer the server's own SPECIAL-USE \Drafts flag; fall back to the usual
-// spellings, including cPanel's INBOX-prefixed ones.
-async function findDraftsFolder(c) {
+// Prefer the server's own SPECIAL-USE flag; fall back to the usual spellings,
+// including cPanel's INBOX-prefixed ones ("INBOX.Drafts", not "Drafts").
+async function findSpecialFolder(c, flag, candidates, label) {
     const boxes = await c.list();
-    const special = boxes.find((b) => b.specialUse === "\\Drafts");
+    const special = boxes.find((b) => b.specialUse === flag);
     if (special)
         return special.path;
-    const candidates = ["INBOX.Drafts", "Drafts", "INBOX/Drafts", "Taslaklar"];
-    const hit = boxes.find((b) => candidates.includes(b.path));
+    const lower = candidates.map((x) => x.toLowerCase());
+    const hit = boxes.find((b) => lower.includes(b.path.toLowerCase()));
     if (hit)
         return hit.path;
-    throw new Error("Taslak klasörü bulunamadı. draftsFolder parametresiyle klasör adını verin " +
-        "(list_folders ile görebilirsiniz).");
+    throw new Error(`${label} klasörü bulunamadı. folder parametresiyle klasör adını verin ` +
+        `(list_folders ile görebilirsiniz).`);
+}
+const findDraftsFolder = (c) => findSpecialFolder(c, "\\Drafts", ["INBOX.Drafts", "Drafts", "Taslaklar"], "Taslaklar");
+const findSentFolder = (c) => findSpecialFolder(c, "\\Sent", ["INBOX.Sent", "Sent", "Sent Items", "Gönderilmiş Öğeler", "Giden"], "Gönderilenler");
+const findTrashFolder = (c) => findSpecialFolder(c, "\\Trash", ["INBOX.Trash", "Trash", "Deleted Items", "Çöp Kutusu", "Silinmiş"], "Çöp kutusu");
+const findJunkFolder = (c) => findSpecialFolder(c, "\\Junk", ["INBOX.spam", "INBOX.Junk", "Junk", "Spam"], "Spam");
+const findArchiveFolder = (c) => findSpecialFolder(c, "\\Archive", ["INBOX.Archive", "Archive", "Arşiv"], "Arşiv");
+// Raw source -> decoded headers, text, html and attachment metadata. The old
+// "slice off everything before the first blank line" approach handed back
+// base64 blobs for anything that was not a plain-text single-part message.
+async function fetchParsed(uid, folder) {
+    return withImap(async (c) => {
+        const lock = await c.getMailboxLock(folder);
+        try {
+            const msg = await c.fetchOne(String(uid), { source: true }, { uid: true });
+            if (!msg || !msg.source)
+                return null;
+            return await simpleParser(msg.source);
+        }
+        finally {
+            lock.release();
+        }
+    });
+}
+// Resolve the destination before taking the source lock: resolving it needs a
+// LIST, and holding a mailbox lock while issuing one is asking for trouble.
+async function moveMessage(folder, uid, target) {
+    return withImap(async (c) => {
+        const dest = typeof target === "string" ? target : await target(c);
+        const lock = await c.getMailboxLock(folder);
+        try {
+            await c.messageMove(String(uid), dest, { uid: true });
+            return ok(`uid ${uid} taşındı: ${folder} → ${dest}`);
+        }
+        finally {
+            lock.release();
+        }
+    });
+}
+function addrList(v) {
+    if (!v)
+        return "";
+    const arr = Array.isArray(v) ? v : [v];
+    return arr
+        .flatMap((a) => a?.value ?? [])
+        .map((a) => (a.name ? `${a.name} <${a.address}>` : a.address))
+        .join(", ");
+}
+function quoteBody(parsed) {
+    const when = parsed.date ? parsed.date.toISOString().slice(0, 16).replace("T", " ") : "";
+    const who = addrList(parsed.from) || "gönderen";
+    const body = (parsed.text ?? "").split("\n").map((l) => `> ${l}`).join("\n");
+    return `\n\n${when} tarihinde ${who} yazdı:\n${body}`;
+}
+// Keep the thread intact: without In-Reply-To/References, mail clients show the
+// reply as a brand-new conversation.
+function threadHeaders(parsed) {
+    const id = parsed.messageId;
+    if (!id)
+        return {};
+    const refs = [parsed.references ?? [], id].flat().filter(Boolean).join(" ");
+    return { inReplyTo: id, references: refs };
+}
+// Copy to the Sent folder ourselves: SMTP delivery does not put anything there,
+// so without this the user's own Sent folder never shows what Claude sent.
+async function appendToSent(raw) {
+    try {
+        await withImap(async (c) => {
+            const sent = await findSentFolder(c);
+            await c.append(sent, Buffer.isBuffer(raw) ? raw : Buffer.from(raw, "utf8"), ["\\Seen"]);
+        });
+        return " Gönderilenler'e kaydedildi.";
+    }
+    catch {
+        return " (Gönderilenler'e kaydedilemedi.)";
+    }
+}
+// Compose once, then send that exact byte stream and file the same bytes in
+// Sent, so the copy the user keeps matches what the recipient got (same
+// Message-ID included).
+async function sendAndFile(mail) {
+    const compiled = new MailComposer({ ...mail, from: CFG.from }).compile();
+    // With `raw`, nodemailer does not read recipients out of the headers, so the
+    // envelope has to be derived explicitly (this is also what carries Bcc,
+    // which is deliberately absent from the built message).
+    // getEnvelope() reports `from: false` when there is none; the send options
+    // type wants it absent instead.
+    const env = compiled.getEnvelope();
+    const envelope = { from: env.from || undefined, to: env.to ?? [] };
+    const raw = await compiled.build();
+    const info = await smtp.sendMail({ envelope, raw });
+    const filed = await appendToSent(raw);
+    return `Gönderildi. messageId=${info.messageId}${filed}`;
 }
 const smtp = nodemailer.createTransport({
     host: CFG.smtp.host,
@@ -285,6 +380,11 @@ const tools = [
                 html: { type: "string", description: "Optional HTML body." },
                 cc: { type: "string" },
                 bcc: { type: "string" },
+                attachments: {
+                    type: "array",
+                    description: "Local file paths to attach.",
+                    items: { type: "string" },
+                },
             },
             required: ["to", "subject", "text"],
         },
@@ -298,10 +398,169 @@ const tools = [
                 to: { type: "string" },
                 subject: { type: "string" },
                 text: { type: "string" },
-                draftsFolder: { type: "string", description: "Default 'Drafts'." },
+                draftsFolder: { type: "string", description: "Defaults to the server's Drafts folder." },
             },
             required: ["to", "subject", "text"],
         },
+    },
+    {
+        name: "reply_message",
+        description: "Reply to a message, keeping it in the same conversation thread. Sends immediately; confirm content first. Use replyAll to include everyone.",
+        inputSchema: {
+            type: "object",
+            properties: {
+                uid: { type: "number", description: "UID of the message being replied to." },
+                text: { type: "string", description: "Your reply, in plain text." },
+                folder: { type: "string", description: "Folder the original is in. Default INBOX." },
+                replyAll: { type: "boolean", description: "Also reply to Cc and other To recipients." },
+                quote: { type: "boolean", description: "Quote the original below your reply. Default true." },
+            },
+            required: ["uid", "text"],
+        },
+    },
+    {
+        name: "forward_message",
+        description: "Forward a message to other recipients, keeping its attachments.",
+        inputSchema: {
+            type: "object",
+            properties: {
+                uid: { type: "number" },
+                to: { type: "string", description: "Comma-separated recipients." },
+                text: { type: "string", description: "Optional note to add above the forwarded message." },
+                folder: { type: "string", description: "Default INBOX." },
+                cc: { type: "string" },
+            },
+            required: ["uid", "to"],
+        },
+    },
+    {
+        name: "move_message",
+        description: "Move a message to another folder.",
+        inputSchema: {
+            type: "object",
+            properties: {
+                uid: { type: "number" },
+                target: { type: "string", description: "Destination folder (see list_folders)." },
+                folder: { type: "string", description: "Source folder. Default INBOX." },
+            },
+            required: ["uid", "target"],
+        },
+    },
+    {
+        name: "trash_message",
+        description: "Move a message to the Trash folder. This is the safe, reversible way to delete — prefer it over delete_message.",
+        inputSchema: {
+            type: "object",
+            properties: {
+                uid: { type: "number" },
+                folder: { type: "string", description: "Default INBOX." },
+            },
+            required: ["uid"],
+        },
+    },
+    {
+        name: "archive_message",
+        description: "Move a message to the Archive folder.",
+        inputSchema: {
+            type: "object",
+            properties: {
+                uid: { type: "number" },
+                folder: { type: "string", description: "Default INBOX." },
+            },
+            required: ["uid"],
+        },
+    },
+    {
+        name: "mark_spam",
+        description: "Move a message to the Junk/Spam folder.",
+        inputSchema: {
+            type: "object",
+            properties: {
+                uid: { type: "number" },
+                folder: { type: "string", description: "Default INBOX." },
+            },
+            required: ["uid"],
+        },
+    },
+    {
+        name: "set_flags",
+        description: "Mark a message read/unread, flagged/unflagged, or answered. Only the fields you pass are changed.",
+        inputSchema: {
+            type: "object",
+            properties: {
+                uid: { type: "number" },
+                folder: { type: "string", description: "Default INBOX." },
+                read: { type: "boolean", description: "true = mark read, false = mark unread." },
+                flagged: { type: "boolean", description: "true = star/flag it, false = remove." },
+                answered: { type: "boolean" },
+            },
+            required: ["uid"],
+        },
+    },
+    {
+        name: "list_attachments",
+        description: "List the attachments on a message (filename, type, size).",
+        inputSchema: {
+            type: "object",
+            properties: {
+                uid: { type: "number" },
+                folder: { type: "string", description: "Default INBOX." },
+            },
+            required: ["uid"],
+        },
+    },
+    {
+        name: "save_attachment",
+        description: "Save one attachment from a message to a local directory.",
+        inputSchema: {
+            type: "object",
+            properties: {
+                uid: { type: "number" },
+                filename: { type: "string", description: "Attachment filename, from list_attachments." },
+                directory: { type: "string", description: "Where to save. Default ~/Downloads." },
+                folder: { type: "string", description: "Default INBOX." },
+            },
+            required: ["uid", "filename"],
+        },
+    },
+    {
+        name: "create_folder",
+        description: "Create a new mail folder.",
+        inputSchema: {
+            type: "object",
+            properties: {
+                name: { type: "string", description: "Folder name, e.g. 'INBOX.Projeler'." },
+            },
+            required: ["name"],
+        },
+    },
+    {
+        name: "rename_folder",
+        description: "Rename a mail folder.",
+        inputSchema: {
+            type: "object",
+            properties: {
+                from: { type: "string", description: "Current folder name." },
+                to: { type: "string", description: "New folder name." },
+            },
+            required: ["from", "to"],
+        },
+    },
+    {
+        name: "delete_folder",
+        description: "Delete a mail folder and everything in it. Irreversible — move any messages you want to keep first.",
+        inputSchema: {
+            type: "object",
+            properties: {
+                name: { type: "string", description: "Folder to delete." },
+            },
+            required: ["name"],
+        },
+    },
+    {
+        name: "empty_trash",
+        description: "Permanently delete everything in the Trash folder. Irreversible.",
+        inputSchema: { type: "object", properties: {} },
     },
 ];
 if (CFG.caldav) {
@@ -335,6 +594,33 @@ if (CFG.caldav) {
                 calendarUrl: { type: "string", description: "Optional target calendar URL." },
             },
             required: ["summary", "start", "end"],
+        },
+    }, {
+        name: "update_event",
+        description: "Change an existing event. Only the fields you pass are modified; the rest stay as they are.",
+        inputSchema: {
+            type: "object",
+            properties: {
+                uid: { type: "string", description: "Event UID, from list_events." },
+                summary: { type: "string" },
+                start: { type: "string", description: "ISO datetime." },
+                end: { type: "string", description: "ISO datetime." },
+                description: { type: "string" },
+                location: { type: "string" },
+                calendarUrl: { type: "string" },
+            },
+            required: ["uid"],
+        },
+    }, {
+        name: "delete_event",
+        description: "Delete a calendar event. This cannot be undone.",
+        inputSchema: {
+            type: "object",
+            properties: {
+                uid: { type: "string", description: "Event UID, from list_events." },
+                calendarUrl: { type: "string" },
+            },
+            required: ["uid"],
         },
     });
 }
@@ -419,41 +705,203 @@ async function handle(name, args) {
                     lock.release();
                 }
             });
-        case "get_message":
-            return withImap(async (c) => {
-                const folder = args.folder ?? "INBOX";
-                const lock = await c.getMailboxLock(folder);
-                try {
-                    const msg = await c.fetchOne(String(args.uid), { source: true, envelope: true }, { uid: true });
-                    if (!msg || !msg.source)
-                        return ok("(message not found)");
-                    const e = msg.envelope;
-                    const header = `From: ${e?.from?.map((a) => a.address).join(", ") ?? "?"}\n` +
-                        `To: ${e?.to?.map((a) => a.address).join(", ") ?? "?"}\n` +
-                        `Date: ${e?.date?.toISOString?.() ?? "?"}\n` +
-                        `Subject: ${e?.subject ?? "(no subject)"}\n\n`;
-                    // crude body extraction: strip headers block from raw source
-                    const raw = msg.source.toString("utf8");
-                    const bodyStart = raw.indexOf("\r\n\r\n");
-                    const body = bodyStart >= 0 ? raw.slice(bodyStart + 4) : raw;
-                    return ok(header + body.slice(0, 8000));
-                }
-                finally {
-                    lock.release();
-                }
-            });
-        case "send_message": {
-            const info = await smtp.sendMail({
-                from: CFG.from,
+        case "get_message": {
+            const parsed = await fetchParsed(args.uid, args.folder ?? "INBOX");
+            if (!parsed)
+                return ok("(mesaj bulunamadı)");
+            const atts = parsed.attachments ?? [];
+            const header = `Gönderen: ${addrList(parsed.from) || "?"}\n` +
+                `Alıcı: ${addrList(parsed.to) || "?"}\n` +
+                (addrList(parsed.cc) ? `Cc: ${addrList(parsed.cc)}\n` : "") +
+                `Tarih: ${parsed.date?.toISOString?.() ?? "?"}\n` +
+                `Konu: ${parsed.subject ?? "(konu yok)"}\n` +
+                (atts.length
+                    ? `Ekler: ${atts.map((a) => a.filename ?? "(isimsiz)").join(", ")}\n`
+                    : "") +
+                `\n`;
+            // text is the decoded plain-text part; fall back to stripping the HTML
+            // part when a sender ships HTML only.
+            const body = parsed.text ??
+                (parsed.html ? String(parsed.html).replace(/<[^>]+>/g, " ").replace(/\s+/g, " ") : "");
+            return ok(header + body.slice(0, 8000));
+        }
+        case "send_message":
+            return ok(await sendAndFile({
                 to: args.to,
                 cc: args.cc,
                 bcc: args.bcc,
                 subject: args.subject,
                 text: args.text,
                 html: args.html,
+                attachments: (args.attachments ?? []).map((p) => ({ path: p })),
+            }));
+        case "reply_message": {
+            const folder = args.folder ?? "INBOX";
+            const parsed = await fetchParsed(args.uid, folder);
+            if (!parsed)
+                return ok("(mesaj bulunamadı)");
+            const me = CFG.imap.user.toLowerCase();
+            const from = addrList(parsed.from);
+            let to = from;
+            let cc = "";
+            if (args.replyAll) {
+                // Everyone on the original minus ourselves, so we do not self-reply.
+                const others = [addrList(parsed.to), addrList(parsed.cc)]
+                    .filter(Boolean)
+                    .join(", ")
+                    .split(",")
+                    .map((s) => s.trim())
+                    .filter((s) => s && !s.toLowerCase().includes(me));
+                cc = [...new Set(others)].join(", ");
+            }
+            const subject = /^re:/i.test(parsed.subject ?? "")
+                ? parsed.subject
+                : `Re: ${parsed.subject ?? ""}`;
+            const body = args.quote === false ? args.text : args.text + quoteBody(parsed);
+            const res = await sendAndFile({
+                to,
+                cc: cc || undefined,
+                subject,
+                text: body,
+                ...threadHeaders(parsed),
             });
-            return ok(`Sent. messageId=${info.messageId}`);
+            // \Answered is what mail clients use to draw the reply arrow.
+            await withImap(async (c) => {
+                const lock = await c.getMailboxLock(folder);
+                try {
+                    await c.messageFlagsAdd(String(args.uid), ["\\Answered"], { uid: true });
+                }
+                finally {
+                    lock.release();
+                }
+            }).catch(() => { });
+            return ok(`${res} Alıcı: ${to}${cc ? ` | Cc: ${cc}` : ""}`);
         }
+        case "forward_message": {
+            const folder = args.folder ?? "INBOX";
+            const parsed = await fetchParsed(args.uid, folder);
+            if (!parsed)
+                return ok("(mesaj bulunamadı)");
+            const subject = /^(fwd|fw):/i.test(parsed.subject ?? "")
+                ? parsed.subject
+                : `Fwd: ${parsed.subject ?? ""}`;
+            const header = `\n\n---------- İletilen mesaj ----------\n` +
+                `Gönderen: ${addrList(parsed.from)}\n` +
+                `Tarih: ${parsed.date?.toISOString?.() ?? ""}\n` +
+                `Konu: ${parsed.subject ?? ""}\n` +
+                `Alıcı: ${addrList(parsed.to)}\n\n`;
+            return ok(await sendAndFile({
+                to: args.to,
+                cc: args.cc,
+                subject,
+                text: (args.text ?? "") + header + (parsed.text ?? ""),
+                attachments: (parsed.attachments ?? []).map((a) => ({
+                    filename: a.filename,
+                    content: a.content,
+                    contentType: a.contentType,
+                })),
+            }));
+        }
+        case "move_message":
+            return moveMessage(args.folder ?? "INBOX", args.uid, args.target);
+        case "trash_message":
+            return moveMessage(args.folder ?? "INBOX", args.uid, findTrashFolder);
+        case "archive_message":
+            return moveMessage(args.folder ?? "INBOX", args.uid, findArchiveFolder);
+        case "mark_spam":
+            return moveMessage(args.folder ?? "INBOX", args.uid, findJunkFolder);
+        case "set_flags":
+            return withImap(async (c) => {
+                const folder = args.folder ?? "INBOX";
+                const lock = await c.getMailboxLock(folder);
+                try {
+                    const add = [];
+                    const del = [];
+                    if (args.read === true)
+                        add.push("\\Seen");
+                    if (args.read === false)
+                        del.push("\\Seen");
+                    if (args.flagged === true)
+                        add.push("\\Flagged");
+                    if (args.flagged === false)
+                        del.push("\\Flagged");
+                    if (args.answered === true)
+                        add.push("\\Answered");
+                    if (args.answered === false)
+                        del.push("\\Answered");
+                    if (!add.length && !del.length)
+                        return ok("(değiştirilecek bir şey belirtilmedi)");
+                    const uid = String(args.uid);
+                    if (add.length)
+                        await c.messageFlagsAdd(uid, add, { uid: true });
+                    if (del.length)
+                        await c.messageFlagsRemove(uid, del, { uid: true });
+                    return ok(`uid ${args.uid} güncellendi. Eklenen: ${add.join(" ") || "-"}, kaldırılan: ${del.join(" ") || "-"}`);
+                }
+                finally {
+                    lock.release();
+                }
+            });
+        case "list_attachments": {
+            const parsed = await fetchParsed(args.uid, args.folder ?? "INBOX");
+            if (!parsed)
+                return ok("(mesaj bulunamadı)");
+            const atts = parsed.attachments ?? [];
+            if (!atts.length)
+                return ok("(ek yok)");
+            return ok(atts
+                .map((a) => `${a.filename ?? "(isimsiz)"}  —  ${a.contentType}  —  ${a.size} bayt`)
+                .join("\n"));
+        }
+        case "save_attachment": {
+            const parsed = await fetchParsed(args.uid, args.folder ?? "INBOX");
+            if (!parsed)
+                return ok("(mesaj bulunamadı)");
+            const att = (parsed.attachments ?? []).find((a) => a.filename === args.filename);
+            if (!att)
+                return ok(`(ek bulunamadı: ${args.filename})`);
+            const dir = args.directory ?? join(homedir(), "Downloads");
+            mkdirSync(dir, { recursive: true });
+            // basename() so a crafted filename cannot escape the chosen directory.
+            const dest = join(dir, basename(String(args.filename)));
+            writeFileSync(dest, att.content);
+            return ok(`Kaydedildi: ${dest}`);
+        }
+        case "create_folder":
+            return withImap(async (c) => {
+                await c.mailboxCreate(args.name);
+                return ok(`Klasör oluşturuldu: ${args.name}`);
+            });
+        case "rename_folder":
+            return withImap(async (c) => {
+                await c.mailboxRename(args.from, args.to);
+                return ok(`Klasör yeniden adlandırıldı: ${args.from} → ${args.to}`);
+            });
+        case "delete_folder":
+            return withImap(async (c) => {
+                // Refuse the folders the mailbox cannot function without.
+                const protectedBoxes = ["inbox"];
+                if (protectedBoxes.includes(String(args.name).toLowerCase())) {
+                    return ok(`${args.name} silinemez.`);
+                }
+                await c.mailboxDelete(args.name);
+                return ok(`Klasör silindi: ${args.name}`);
+            });
+        case "empty_trash":
+            return withImap(async (c) => {
+                const trash = await findTrashFolder(c);
+                const lock = await c.getMailboxLock(trash);
+                try {
+                    const status = await c.status(trash, { messages: true });
+                    if (!status.messages)
+                        return ok(`${trash} zaten boş.`);
+                    await c.messageDelete({ all: true });
+                    return ok(`${trash} boşaltıldı (${status.messages} mesaj kalıcı olarak silindi).`);
+                }
+                finally {
+                    lock.release();
+                }
+            });
         case "create_draft":
             return withImap(async (c) => {
                 // cPanel namespaces folders under INBOX ("INBOX.Drafts"), so a literal
@@ -507,14 +955,55 @@ async function handle(name, args) {
                     const comp = new ICAL.Component(jcal);
                     for (const ev of comp.getAllSubcomponents("vevent")) {
                         const v = new ICAL.Event(ev);
-                        out.push(`${v.startDate?.toString() ?? "?"} → ${v.endDate?.toString() ?? "?"}  ${v.summary ?? "(no title)"}`);
+                        // The UID is what update_event/delete_event need as their handle.
+                        out.push(`${v.startDate?.toString() ?? "?"} → ${v.endDate?.toString() ?? "?"}  ${v.summary ?? "(başlıksız)"}${v.location ? `  @ ${v.location}` : ""}  [uid ${v.uid}]`);
                     }
                 }
                 catch {
                     /* skip unparseable */
                 }
             }
-            return ok(out.sort().join("\n") || "(no events in range)");
+            return ok(out.sort().join("\n") || "(bu aralıkta etkinlik yok)");
+        }
+        case "update_event":
+        case "delete_event": {
+            const { headers } = await getDav();
+            const cals = await getCalendars();
+            const target = pickCalendar(cals, args.calendarUrl);
+            if (!target)
+                return ok("(takvim bulunamadı)");
+            const objs = await fetchCalendarObjects({ calendar: target, headers });
+            const hit = objs.find((o) => o.data && o.data.includes(`UID:${args.uid}`));
+            if (!hit)
+                return ok(`(etkinlik bulunamadı: ${args.uid})`);
+            if (name === "delete_event") {
+                await deleteCalendarObject({ calendarObject: hit, headers });
+                return ok(`Etkinlik silindi: ${args.uid}`);
+            }
+            // Edit the existing VEVENT in place so fields we were not given keep
+            // their current values.
+            const comp = new ICAL.Component(ICAL.parse(hit.data));
+            const vevent = comp.getAllSubcomponents("vevent")[0];
+            if (!vevent)
+                return ok("(etkinlik okunamadı)");
+            const setProp = (k, val) => {
+                if (val === undefined)
+                    return;
+                vevent.updatePropertyWithValue(k, val);
+            };
+            setProp("summary", args.summary);
+            setProp("description", args.description);
+            setProp("location", args.location);
+            if (args.start)
+                vevent.updatePropertyWithValue("dtstart", ICAL.Time.fromJSDate(new Date(args.start), true));
+            if (args.end)
+                vevent.updatePropertyWithValue("dtend", ICAL.Time.fromJSDate(new Date(args.end), true));
+            vevent.updatePropertyWithValue("dtstamp", ICAL.Time.fromJSDate(new Date(), true));
+            await updateCalendarObject({
+                calendarObject: { ...hit, data: comp.toString() },
+                headers,
+            });
+            return ok(`Etkinlik güncellendi: ${args.uid}`);
         }
         case "create_event": {
             const { headers } = await getDav();
