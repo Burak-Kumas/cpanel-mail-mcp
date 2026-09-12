@@ -1,0 +1,10 @@
+# Kimlik bilgileri — ASLA depoya girmemeli
+.env
+.env.*
+!.env.example
+*.bak
+*.bak-*
+
+node_modules/
+.DS_Store
+npm-debug.log*

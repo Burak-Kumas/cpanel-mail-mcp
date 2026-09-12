@@ -1,0 +1,40 @@
+{
+  "name": "cpanel-mail-mcp",
+  "version": "0.1.0",
+  "description": "Self-hosted stdio MCP server for cPanel mailboxes: IMAP + SMTP + CalDAV. One mailbox per instance, credentials via env only.",
+  "type": "module",
+  "bin": {
+    "cpanel-mail-mcp": "build/index.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Burak-Kumas/cpanel-mail-mcp.git"
+  },
+  "files": [
+    "build",
+    "src",
+    ".env.example",
+    "KURULUM.md",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc && chmod +x build/index.js",
+    "start": "node build/index.js",
+    "setup": "node build/index.js setup"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "imapflow": "^1.0.164",
+    "nodemailer": "^10.0.9",
+    "tsdav": "^2.1.2",
+    "ical.js": "^2.1.0"
+  },
+  "devDependencies": {
+    "@types/nodemailer": "^8.0.1",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.5.0"
+  }
+}
