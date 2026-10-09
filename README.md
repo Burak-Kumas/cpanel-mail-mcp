@@ -9,8 +9,11 @@ Ekip üyeleri için kurulum talimatı: **[KURULUM.md](KURULUM.md)**
 ## Kurulum
 
 ```bash
-npx -y github:Burak-Kumas/cpanel-mail-mcp setup
+npx -y https://github.com/Burak-Kumas/cpanel-mail-mcp/archive/refs/heads/main.tar.gz setup
 ```
+
+Kurulum git yerine GitHub'ın `.tar.gz` arşivinden yapılır: npm 12 ve sonrası
+`github:` kaynaklarını varsayılan olarak reddeder (`EALLOWGIT`).
 
 Sihirbaz cPanel posta hesabının kullanıcı adını, şifresini, sunucusunu ve
 IMAP/SMTP portlarını sorar (sunucu ve portlar cPanel varsayılanlarıyla dolu
@@ -64,7 +67,7 @@ cp .env.example .env   # kendi değerlerini gir
 npm start
 ```
 
-`build/` depoya dahildir; `npx github:...` kurulumunun derleme adımı olmadan
+`build/` depoya dahildir; `npx` ile tarball kurulumunun derleme adımı olmadan
 çalışabilmesi için gereklidir. Kaynak değiştirdiğinde `npm run build` çalıştırıp
 `build/` çıktısını da commit et.
 

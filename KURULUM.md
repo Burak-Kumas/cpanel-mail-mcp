@@ -28,7 +28,7 @@ kur, sonra Terminal'i kapatıp yeniden aç.
 Terminal'e şunu yapıştır ve Enter'a bas:
 
 ```bash
-npx -y github:Burak-Kumas/cpanel-mail-mcp setup
+npx -y https://github.com/Burak-Kumas/cpanel-mail-mcp/archive/refs/heads/main.tar.gz setup
 ```
 
 cPanel posta hesabının bilgilerini soracak:
