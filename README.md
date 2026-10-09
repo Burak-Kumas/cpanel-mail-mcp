@@ -12,9 +12,10 @@ Ekip üyeleri için kurulum talimatı: **[KURULUM.md](KURULUM.md)**
 npx -y github:Burak-Kumas/cpanel-mail-mcp setup
 ```
 
-Sihirbaz yalnızca e-posta adresi ve şifre sorar. Sunucu adını, portları ve
-takvimin var olup olmadığını kendisi tespit eder; şifreyi kaydetmeden önce
-gerçek bir IMAP girişiyle doğrular; ardından hem Claude Code'a hem masaüstü
+Sihirbaz cPanel posta hesabının kullanıcı adını, şifresini, sunucusunu ve
+IMAP/SMTP portlarını sorar (sunucu ve portlar cPanel varsayılanlarıyla dolu
+gelir). Kaydetmeden önce gerçek bir IMAP ve SMTP girişiyle doğrular; takvimin
+var olup olmadığını kendisi tespit eder; ardından hem Claude Code'a hem masaüstü
 uygulamasına kaydeder.
 
 Kurulum `~/.cpanel-mail-mcp/` altına yapılır (npx önbelleği geçici olduğu için

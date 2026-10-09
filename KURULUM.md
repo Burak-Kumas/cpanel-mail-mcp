@@ -31,16 +31,23 @@ Terminal'e şunu yapıştır ve Enter'a bas:
 npx -y github:Burak-Kumas/cpanel-mail-mcp setup
 ```
 
-Sana iki şey soracak:
+cPanel posta hesabının bilgilerini soracak:
 
-1. **E-posta adresin** — örn. `ad@dantatsu.com`
-2. **Posta hesabı şifren** — yazarken ekranda görünmez, bu normaldir
+1. **Kullanıcı adı**: tam e-posta adresin, örn. `ad@firma.com`
+2. **Şifre**: yazarken ekranda görünmez, bu normaldir
+3. **Sunucu (host)**: varsayılan `mail.alanadiniz.com`
+4. **IMAP portu**: varsayılan `993`
+5. **SMTP portu**: varsayılan `465`
 
-> Bu, cPanel/webmail **giriş** şifren değil, o posta hesabının şifresidir.
+Hepsi cPanel > Email Accounts > **Connect Devices** ekranındaki
+*Secure SSL/TLS Settings* bölümünde yazar. Köşeli parantez içinde gösterilen
+değer doğruysa Enter'a basman yeterli.
+
+> Şifre, cPanel/webmail **giriş** şifren değil, o posta hesabının şifresidir.
 > İkisi aynıysa sorun yok.
 
-Sunucu adresini, portları ve takvimi kendisi bulur. Şifreni kaydetmeden önce
-gerçekten çalışıp çalışmadığını dener; yanlışsa tekrar sorar.
+Kaydetmeden önce IMAP ve SMTP girişini gerçekten dener; yanlışsa bilgileri
+tekrar sorar. Takvimi kendisi bulur.
 
 Bitince **Claude'u tamamen kapatıp yeniden aç.**
 
@@ -89,9 +96,10 @@ Node.js kurulu değil. Yukarıdaki "Önce" bölümüne dön.
 Şifre yanlış. Unutma: cPanel giriş şifren değil, posta hesabının şifresi.
 Webmail'e (`https://webmail.alanadiniz.com`) o şifreyle girebiliyorsan doğrudur.
 
-**"Sunucu adını otomatik bulamadım" diyor**
-Sana sunucu adını soracak. cPanel > Email Accounts > **Connect Devices**
-ekranındaki *Secure SSL/TLS Settings* altındaki Incoming Server adını gir.
+**Sunucu adını ya da portu bilmiyorum**
+cPanel > Email Accounts > **Connect Devices** ekranındaki *Secure SSL/TLS
+Settings* bölümüne bak: Incoming Server (IMAP, 993) ve Outgoing Server
+(SMTP, 465) orada yazar.
 
 **Kurulum bitti ama Claude mailimi görmüyor**
 Claude'u tamamen kapatıp yeniden aç (pencereyi kapatmak yetmez; Mac'te

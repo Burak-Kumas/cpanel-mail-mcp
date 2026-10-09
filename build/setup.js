@@ -2,9 +2,10 @@
  * Interactive installer: `cpanel-mail-mcp setup`
  *
  * Goal is a one-command install for non-technical teammates. It:
- *   1. asks for the mailbox address and password (password never echoed),
- *   2. guesses IMAP/SMTP hosts from the domain and verifies them over TLS,
+ *   1. asks for the mailbox username and password (password never echoed),
+ *   2. asks for the cPanel mail host and ports, pre-filled with the defaults,
  *   3. proves the credentials work with a real IMAP login BEFORE saving,
+ *      and checks SMTP with the same login,
  *   4. copies the server to a permanent directory (npx's cache is temporary,
  *      and the MCP registration must keep working after it is cleared),
  *   5. registers it with both Claude Code and the Claude desktop app.
@@ -21,6 +22,7 @@ import { fileURLToPath } from "node:url";
 import * as readline from "node:readline";
 import { Writable } from "node:stream";
 import { ImapFlow } from "imapflow";
+import nodemailer from "nodemailer";
 const PKG_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const INSTALL_DIR = join(homedir(), ".cpanel-mail-mcp");
 const ENV_PATH = join(INSTALL_DIR, ".env");
@@ -89,6 +91,25 @@ async function imapLoginWorks(host, port, user, pass) {
         return e instanceof Error ? e.message : String(e);
     }
 }
+async function smtpLoginWorks(host, port, user, pass) {
+    const t = nodemailer.createTransport({
+        host,
+        port,
+        secure: port === 465,
+        auth: { user, pass },
+        connectionTimeout: 10000,
+    });
+    try {
+        await t.verify();
+        return null;
+    }
+    catch (e) {
+        return e instanceof Error ? e.message : String(e);
+    }
+    finally {
+        t.close();
+    }
+}
 // ---------- Claude registration ----------
 function desktopConfigPath() {
     const home = homedir();
@@ -154,9 +175,25 @@ function registerClaudeCode(nodePath) {
         ? "Claude Code'a eklendi."
         : `Claude Code'a eklenemedi: ${(r.stderr || r.stdout || "").trim()}`;
 }
+// Plain ASCII only: Windows consoles and older terminals mangle box-drawing
+// characters.
+const BANNER = String.raw `
+   +-----------------------------------------------------+
+   |                                                     |
+   |    __  __    _    ___ _       __  __  ____ ____     |
+   |   |  \/  |  / \  |_ _| |     |  \/  |/ ___|  _ \    |
+   |   | |\/| | / _ \  | || |     | |\/| | |   | |_) |   |
+   |   | |  | |/ ___ \ | || |___  | |  | | |___|  __/    |
+   |   |_|  |_/_/   \_\___|_____| |_|  |_|\____|_|       |
+   |                                                     |
+   |        IMAP  .  SMTP  .  Takvim  ->  Claude         |
+   |                                                     |
+   +-----------------------------------------------------+
+`;
 // ---------- main ----------
 export async function runSetup() {
-    console.log("\n  cpanel-mail-mcp kurulumu\n  " + "-".repeat(26) + "\n");
+    console.log(BANNER);
+    console.log("   cPanel posta hesabı kurulumu: kullanıcı adı, şifre, sunucu ve port.\n");
     if (existsSync(ENV_PATH)) {
         const overwrite = await askYesNo("Mevcut bir kurulum var. Ayarları yeniden girmek istiyor musun?", false);
         if (!overwrite) {
@@ -168,46 +205,47 @@ export async function runSetup() {
             return;
         }
     }
-    const email = await ask("E-posta adresin (örn. ad@firma.com)");
-    if (!email.includes("@")) {
-        console.log("\nGeçerli bir e-posta adresi gerekiyor. Kurulum durduruldu.");
-        rl.close();
-        process.exit(1);
-    }
-    const domain = email.split("@")[1];
-    // Standard cPanel SSL ports. Only worth asking about if the probe below
-    // cannot reach the server at all.
-    const imapPort = 993;
-    const smtpPort = 465;
-    // cPanel answers on mail.<domain> in practice, so detect it instead of
-    // sending people into the "Connect Devices" screen.
-    let host = `mail.${domain}`;
-    process.stdout.write(`\n  Sunucu aranıyor (${host})... `);
-    let guessOk = await tlsReachable(host, imapPort);
-    console.log(guessOk ? "bulundu." : "yanıt vermedi.");
-    if (!guessOk) {
-        console.log("\n  Sunucu adını otomatik bulamadım.\n" +
-            "  cPanel > Email Accounts > Connect Devices ekranındaki\n" +
-            "  'Secure SSL/TLS Settings' sunucu adını gir.\n");
-        host = await ask("IMAP/SMTP sunucusu", host);
-    }
+    // Every value is asked for, but host and ports come pre-filled with the
+    // cPanel defaults (mail.<domain>, 993 SSL, 465 SSL), so Enter accepts them.
+    // Values shown in cPanel > Email Accounts > Connect Devices.
+    console.log("  Bilgiler cPanel > Email Accounts > Connect Devices ekranındaki\n" +
+        "  'Secure SSL/TLS Settings' bölümünde yazar. Köşeli parantezdeki\n" +
+        "  değer doğruysa Enter'a basman yeterli.\n");
+    let email = "";
     let pass = "";
+    let host = "";
+    let imapPort = 993;
+    let smtpPort = 465;
     for (let attempt = 1;; attempt++) {
-        pass = await askHidden("Posta hesabı şifresi (ekranda görünmez)");
-        process.stdout.write("  Giriş deneniyor... ");
-        const err = await imapLoginWorks(host, imapPort, email, pass);
+        email = await ask("Kullanıcı adı (tam e-posta adresi, örn. ad@firma.com)", email || undefined);
+        if (!email.includes("@")) {
+            console.log("  Kullanıcı adı tam e-posta adresi olmalı.\n");
+            continue;
+        }
+        pass = await askHidden("Şifre (ekranda görünmez)");
+        host = await ask("Sunucu (host)", host || `mail.${email.split("@")[1]}`);
+        imapPort = Number(await ask("IMAP portu", String(imapPort))) || 993;
+        smtpPort = Number(await ask("SMTP portu", String(smtpPort))) || 465;
+        process.stdout.write("\n  IMAP girişi deneniyor... ");
+        let err = await imapLoginWorks(host, imapPort, email, pass);
         if (!err) {
-            console.log("başarılı.\n");
-            break;
+            console.log("başarılı.");
+            process.stdout.write("  SMTP girişi deneniyor... ");
+            err = await smtpLoginWorks(host, smtpPort, email, pass);
+            if (!err) {
+                console.log("başarılı.\n");
+                break;
+            }
         }
         console.log("başarısız.");
         console.log(`  Sunucu yanıtı: ${err}`);
-        console.log("  Not: Bu, cPanel giriş şifren değil, o posta hesabının şifresidir.\n");
+        console.log("  Not: Şifre, cPanel giriş şifren değil, o posta hesabının şifresidir.\n");
         if (attempt >= 3) {
             console.log("Üç deneme başarısız oldu. Kurulum durduruldu.");
             rl.close();
             process.exit(1);
         }
+        console.log("  Bilgileri tekrar gir:\n");
     }
     // Calendar is a bonus, not a decision to put in front of the user: enable it
     // when cPanel's CalDAV port answers, stay silent when it does not.
@@ -234,7 +272,7 @@ export async function runSetup() {
     }
     const env = `# ${email} — otomatik oluşturuldu. Gizli dosya: paylaşma, git'e ekleme.\n` +
         `IMAP_HOST=${host}\nIMAP_PORT=${imapPort}\nIMAP_TLS=true\n` +
-        `SMTP_HOST=${host}\nSMTP_PORT=${smtpPort}\nSMTP_TLS=true\n` +
+        `SMTP_HOST=${host}\nSMTP_PORT=${smtpPort}\nSMTP_TLS=${smtpPort === 465}\n` +
         `MAIL_USER=${email}\nMAIL_PASS=${pass}\nMAIL_FROM=${email}\n` +
         (caldavUrl ? `CALDAV_URL=${caldavUrl}\n` : "") +
         `\n# Silme aracı kapalı. Açmak için: ALLOW_DELETE=true (geri alınamaz)\n`;

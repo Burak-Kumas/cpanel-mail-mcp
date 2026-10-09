@@ -15,12 +15,12 @@
  *
  * Required env:
  *   IMAP_HOST, IMAP_PORT (default 993), IMAP_TLS (default true)
- *   SMTP_HOST, SMTP_PORT (default 465), SMTP_TLS (default true)
- *   MAIL_USER      full email address, e.g. burak@dantatsu.com
+ *   SMTP_HOST, SMTP_PORT (default 465), SMTP_TLS (default: true on 465, else STARTTLS)
+ *   MAIL_USER      full email address, e.g. ad@firma.com
  *   MAIL_PASS      mailbox password (or app password)
  * Optional env:
  *   MAIL_FROM      From: header (defaults to MAIL_USER)
- *   CALDAV_URL     e.g. https://mail.dantatsu.com:2080/calendars/burak@dantatsu.com/calendar
+ *   CALDAV_URL     e.g. https://mail.firma.com:2080/calendars/ad@firma.com/calendar
  *   CALDAV_USER    defaults to MAIL_USER
  *   CALDAV_PASS    defaults to MAIL_PASS
  *   CALDAV_INSECURE_TLS = "true" to skip cert verification (cPanel :2080 self-signed). Use with care.
@@ -104,7 +104,8 @@ const CFG = {
     smtp: {
         host: reqEnv("SMTP_HOST"),
         port: Number(process.env.SMTP_PORT ?? 465),
-        secure: boolEnv("SMTP_TLS", true),
+        // 465 is implicit TLS; 587/25 start plain and upgrade with STARTTLS.
+        secure: boolEnv("SMTP_TLS", Number(process.env.SMTP_PORT ?? 465) === 465),
     },
     from: process.env.MAIL_FROM ?? process.env.MAIL_USER,
     caldav: process.env.CALDAV_URL
