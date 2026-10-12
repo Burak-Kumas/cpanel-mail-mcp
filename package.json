@@ -1,6 +1,6 @@
 {
   "name": "cpanel-mail-mcp",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Self-hosted stdio MCP server for cPanel mailboxes: IMAP + SMTP + CalDAV. One mailbox per instance, credentials via env only.",
   "type": "module",
   "bin": {
@@ -17,6 +17,7 @@
     "build",
     "src",
     ".env.example",
+    "SETUP.md",
     "KURULUM.md",
     "README.md"
   ],

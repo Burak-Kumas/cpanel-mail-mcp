@@ -6,6 +6,8 @@ hazırlayabilir, senin onayınla gönderebilir ve takvimini görebilir.
 **Süre: yaklaşık 2 dakika.** Tek komut çalıştırıp e-posta adresin ile şifreni
 gireceksin, başka hiçbir şey yapmana gerek yok.
 
+> English guide: **[SETUP.md](SETUP.md)**
+
 ---
 
 ## Önce: Node.js kurulu mu?
@@ -28,16 +30,17 @@ kur, sonra Terminal'i kapatıp yeniden aç.
 Terminal'e şunu yapıştır ve Enter'a bas:
 
 ```bash
-npx -y https://github.com/Burak-Kumas/cpanel-mail-mcp/archive/refs/heads/main.tar.gz setup
+npx -y --allow-remote=all https://github.com/Burak-Kumas/cpanel-mail-mcp/archive/refs/heads/main.tar.gz setup
 ```
 
-cPanel posta hesabının bilgilerini soracak:
+cPanel posta hesabının bilgilerini soracak (sihirbaz İngilizcedir; ekranda
+parantez içindeki ifadeleri göreceksin):
 
-1. **Kullanıcı adı**: tam e-posta adresin, örn. `ad@firma.com`
-2. **Şifre**: yazarken ekranda görünmez, bu normaldir
-3. **Sunucu (host)**: varsayılan `mail.alanadiniz.com`
-4. **IMAP portu**: varsayılan `993`
-5. **SMTP portu**: varsayılan `465`
+1. **Kullanıcı adı** (*Username*): tam e-posta adresin, örn. `ad@firma.com`
+2. **Şifre** (*Password*): yazarken ekranda görünmez, bu normaldir
+3. **Sunucu** (*Server (host)*): varsayılan `mail.alanadiniz.com`
+4. **IMAP portu** (*IMAP port*): varsayılan `993`
+5. **SMTP portu** (*SMTP port*): varsayılan `465`
 
 Hepsi cPanel > Email Accounts > **Connect Devices** ekranındaki
 *Secure SSL/TLS Settings* bölümünde yazar. Köşeli parantez içinde gösterilen
@@ -92,7 +95,17 @@ geri dönülmez şekilde silemez. Gelen kutusu klasörü de silinemez.
 **`npx: command not found`**
 Node.js kurulu değil. Yukarıdaki "Önce" bölümüne dön.
 
-**"Giriş başarısız" diyor**
+**`npm error code EALLOWREMOTE`** veya **`EALLOWGIT`**
+Komutu `--allow-remote=all` olmadan çalıştırmışsın. npm 12 ve sonrası
+internetten (URL'den) paket indirmeyi varsayılan olarak engeller. Yukarıdaki
+komutu olduğu gibi kopyala; bu izin yalnızca bu tek kurulum için geçerlidir.
+
+**`sudo` ile mi çalıştırayım?**
+Hayır. `sudo` gerekmez; üstelik kurulumu senin kullanıcın yerine `root`
+hesabına yapar ve Claude sunucuyu bulamaz. Daha önce `sudo` ile denediysen
+`sudo chown -R $(whoami) ~/.npm` ile npm önbelleğinin sahipliğini düzelt.
+
+**"failed" / giriş başarısız diyor**
 Şifre yanlış. Unutma: cPanel giriş şifren değil, posta hesabının şifresi.
 Webmail'e (`https://webmail.alanadiniz.com`) o şifreyle girebiliyorsan doğrudur.
 

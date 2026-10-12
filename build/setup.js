@@ -56,9 +56,19 @@ function askHidden(q) {
         });
     });
 }
+// Ask with a pre-filled default, say where the default came from, and confirm
+// the value afterwards so pressing Enter never feels like a guess.
+async function askWithDefault(q, def, hint) {
+    console.log(`  ${hint}`);
+    console.log("  Press Enter to accept the value in brackets, or type a different one.");
+    const a = await ask(q, def);
+    console.log(a === def ? `  -> Using ${a} (default)\n` : `  -> Using ${a}\n`);
+    return a;
+}
 async function askYesNo(q, def = true) {
-    const a = (await ask(`${q} (e/h)`, def ? "e" : "h")).toLowerCase();
-    return a.startsWith("e") || a.startsWith("y");
+    const a = (await ask(`${q} (y/n)`, def ? "y" : "n")).toLowerCase();
+    // "e" (evet) kept so Turkish users answering out of habit still work.
+    return a.startsWith("y") || a.startsWith("e");
 }
 // ---------- checks ----------
 function tlsReachable(host, port, timeout = 7000) {
@@ -141,7 +151,7 @@ function stableNodePath() {
 function registerDesktop(nodePath) {
     const p = desktopConfigPath();
     if (!p)
-        return "Masaüstü uygulaması yapılandırması bulunamadı, atlandı.";
+        return "Claude desktop app config not found, skipped.";
     try {
         let cfg = {};
         if (existsSync(p)) {
@@ -150,7 +160,7 @@ function registerDesktop(nodePath) {
                 cfg = JSON.parse(readFileSync(p, "utf8"));
             }
             catch {
-                return `${p} okunamadı (geçersiz JSON). Masaüstü kaydı atlandı.`;
+                return `Could not read ${p} (invalid JSON). Desktop registration skipped.`;
             }
         }
         else {
@@ -159,21 +169,21 @@ function registerDesktop(nodePath) {
         cfg.mcpServers = cfg.mcpServers ?? {};
         cfg.mcpServers.mail = { command: nodePath, args: [SERVER_PATH] };
         writeFileSync(p, JSON.stringify(cfg, null, 2));
-        return "Claude masaüstü uygulamasına eklendi.";
+        return "Added to the Claude desktop app.";
     }
     catch (e) {
-        return `Masaüstü kaydı yapılamadı: ${e instanceof Error ? e.message : e}`;
+        return `Desktop registration failed: ${e instanceof Error ? e.message : e}`;
     }
 }
 function registerClaudeCode(nodePath) {
     const probe = spawnSync("claude", ["--version"], { encoding: "utf8" });
     if (probe.error)
-        return "Claude Code CLI bulunamadı, atlandı.";
+        return "Claude Code CLI not found, skipped.";
     spawnSync("claude", ["mcp", "remove", "mail", "-s", "user"], { encoding: "utf8" });
     const r = spawnSync("claude", ["mcp", "add", "mail", "--scope", "user", "--", nodePath, SERVER_PATH], { encoding: "utf8" });
     return r.status === 0
-        ? "Claude Code'a eklendi."
-        : `Claude Code'a eklenemedi: ${(r.stderr || r.stdout || "").trim()}`;
+        ? "Added to Claude Code."
+        : `Could not add to Claude Code: ${(r.stderr || r.stdout || "").trim()}`;
 }
 // Plain ASCII only: Windows consoles and older terminals mangle box-drawing
 // characters.
@@ -186,18 +196,18 @@ const BANNER = String.raw `
    |   | |  | |/ ___ \ | || |___  | |  | | |___|  __/    |
    |   |_|  |_/_/   \_\___|_____| |_|  |_|\____|_|       |
    |                                                     |
-   |        IMAP  .  SMTP  .  Takvim  ->  Claude         |
+   |        IMAP  .  SMTP  .  Calendar  ->  Claude       |
    |                                                     |
    +-----------------------------------------------------+
 `;
 // ---------- main ----------
 export async function runSetup() {
     console.log(BANNER);
-    console.log("   cPanel posta hesabı kurulumu: kullanıcı adı, şifre, sunucu ve port.\n");
+    console.log("   cPanel mailbox setup: username, password, server and ports.\n");
     if (existsSync(ENV_PATH)) {
-        const overwrite = await askYesNo("Mevcut bir kurulum var. Ayarları yeniden girmek istiyor musun?", false);
+        const overwrite = await askYesNo("An existing setup was found. Re-enter the settings?", false);
         if (!overwrite) {
-            console.log("\nAyarlar korundu. Kayıtlar yenileniyor...\n");
+            console.log("\nSettings kept. Refreshing registrations...\n");
             const nodePath = stableNodePath();
             console.log("  " + registerClaudeCode(nodePath));
             console.log("  " + registerDesktop(nodePath));
@@ -208,50 +218,54 @@ export async function runSetup() {
     // Every value is asked for, but host and ports come pre-filled with the
     // cPanel defaults (mail.<domain>, 993 SSL, 465 SSL), so Enter accepts them.
     // Values shown in cPanel > Email Accounts > Connect Devices.
-    console.log("  Bilgiler cPanel > Email Accounts > Connect Devices ekranındaki\n" +
-        "  'Secure SSL/TLS Settings' bölümünde yazar. Köşeli parantezdeki\n" +
-        "  değer doğruysa Enter'a basman yeterli.\n");
+    console.log("  You'll find these under cPanel > Email Accounts > Connect Devices,\n" +
+        "  in the 'Secure SSL/TLS Settings' section. Server and ports come\n" +
+        "  pre-filled; press Enter to accept a suggested value.\n");
     let email = "";
     let pass = "";
     let host = "";
     let imapPort = 993;
     let smtpPort = 465;
     for (let attempt = 1;; attempt++) {
-        email = await ask("Kullanıcı adı (tam e-posta adresi, örn. ad@firma.com)", email || undefined);
+        email = await ask("Username (full email address, e.g. name@company.com)", email || undefined);
         if (!email.includes("@")) {
-            console.log("  Kullanıcı adı tam e-posta adresi olmalı.\n");
+            console.log("  The username must be the full email address.\n");
             continue;
         }
-        pass = await askHidden("Şifre (ekranda görünmez)");
-        host = await ask("Sunucu (host)", host || `mail.${email.split("@")[1]}`);
-        imapPort = Number(await ask("IMAP portu", String(imapPort))) || 993;
-        smtpPort = Number(await ask("SMTP portu", String(smtpPort))) || 465;
-        process.stdout.write("\n  IMAP girişi deneniyor... ");
+        pass = await askHidden("Password (hidden while typing)");
+        const domain = email.split("@")[1];
+        console.log("");
+        host = await askWithDefault("Server (host)", host || `mail.${domain}`, `Suggested from your email domain (${domain}); cPanel's usual mail server.`);
+        imapPort =
+            Number(await askWithDefault("IMAP port", String(imapPort), "993 is the cPanel default for IMAP over SSL/TLS (incoming mail).")) || 993;
+        smtpPort =
+            Number(await askWithDefault("SMTP port", String(smtpPort), "465 is the cPanel default for SMTP over SSL/TLS (outgoing mail).")) || 465;
+        process.stdout.write("  Testing IMAP login... ");
         let err = await imapLoginWorks(host, imapPort, email, pass);
         if (!err) {
-            console.log("başarılı.");
-            process.stdout.write("  SMTP girişi deneniyor... ");
+            console.log("ok.");
+            process.stdout.write("  Testing SMTP login... ");
             err = await smtpLoginWorks(host, smtpPort, email, pass);
             if (!err) {
-                console.log("başarılı.\n");
+                console.log("ok.\n");
                 break;
             }
         }
-        console.log("başarısız.");
-        console.log(`  Sunucu yanıtı: ${err}`);
-        console.log("  Not: Şifre, cPanel giriş şifren değil, o posta hesabının şifresidir.\n");
+        console.log("failed.");
+        console.log(`  Server response: ${err}`);
+        console.log("  Note: use the mailbox password, not your cPanel login password.\n");
         if (attempt >= 3) {
-            console.log("Üç deneme başarısız oldu. Kurulum durduruldu.");
+            console.log("Three attempts failed. Setup stopped.");
             rl.close();
             process.exit(1);
         }
-        console.log("  Bilgileri tekrar gir:\n");
+        console.log("  Enter the details again:\n");
     }
     // Calendar is a bonus, not a decision to put in front of the user: enable it
     // when cPanel's CalDAV port answers, stay silent when it does not.
-    process.stdout.write("  Takvim aranıyor... ");
+    process.stdout.write("  Looking for a calendar... ");
     const calOk = await tlsReachable(host, 2080);
-    console.log(calOk ? "bulundu, takvim araçları açılıyor." : "yok, sadece mail kurulacak.");
+    console.log(calOk ? "found, enabling calendar tools." : "none, installing mail only.");
     const caldavUrl = calOk ? `https://${host}:2080/calendars/${email}/calendar` : "";
     // Install to a fixed path: npx runs from a cache that gets cleared, which
     // would break the registration we are about to write.
@@ -264,26 +278,26 @@ export async function runSetup() {
         });
     }
     else {
-        console.log("  Bağımlılıklar kuruluyor...");
+        console.log("  Installing dependencies...");
         spawnSync("npm", ["install", "--omit=dev", "--silent"], {
             cwd: INSTALL_DIR,
             stdio: "inherit",
         });
     }
-    const env = `# ${email} — otomatik oluşturuldu. Gizli dosya: paylaşma, git'e ekleme.\n` +
+    const env = `# ${email} — generated by setup. Secret file: don't share it or commit it.\n` +
         `IMAP_HOST=${host}\nIMAP_PORT=${imapPort}\nIMAP_TLS=true\n` +
         `SMTP_HOST=${host}\nSMTP_PORT=${smtpPort}\nSMTP_TLS=${smtpPort === 465}\n` +
         `MAIL_USER=${email}\nMAIL_PASS=${pass}\nMAIL_FROM=${email}\n` +
         (caldavUrl ? `CALDAV_URL=${caldavUrl}\n` : "") +
-        `\n# Silme aracı kapalı. Açmak için: ALLOW_DELETE=true (geri alınamaz)\n`;
+        `\n# Delete tool is off. To enable: ALLOW_DELETE=true (irreversible)\n`;
     writeFileSync(ENV_PATH, env, { mode: 0o600 });
     chmodSync(ENV_PATH, 0o600);
     const nodePath = stableNodePath();
     console.log("\n  " + registerClaudeCode(nodePath));
     console.log("  " + registerDesktop(nodePath));
-    console.log(`\n  Kurulum tamam.\n\n` +
-        `  Ayarlar: ${ENV_PATH}\n` +
-        `  Açık olan Claude Code / Claude uygulamasını kapatıp yeniden aç.\n` +
-        `  Sonra dene: "Gelen kutumdaki son 10 maili listele"\n`);
+    console.log(`\n  Setup complete.\n\n` +
+        `  Settings: ${ENV_PATH}\n` +
+        `  Fully quit and reopen Claude Code / the Claude app.\n` +
+        `  Then try: "List the last 10 emails in my inbox"\n`);
     rl.close();
 }

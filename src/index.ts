@@ -171,31 +171,31 @@ async function findSpecialFolder(
   const hit = boxes.find((b) => lower.includes(b.path.toLowerCase()));
   if (hit) return hit.path;
   throw new Error(
-    `${label} klasörü bulunamadı. folder parametresiyle klasör adını verin ` +
-      `(list_folders ile görebilirsiniz).`
+    `${label} folder not found. Pass the folder name with the folder parameter ` +
+      `(see list_folders).`
   );
 }
 
 const findDraftsFolder = (c: ImapFlow) =>
-  findSpecialFolder(c, "\\Drafts", ["INBOX.Drafts", "Drafts", "Taslaklar"], "Taslaklar");
+  findSpecialFolder(c, "\\Drafts", ["INBOX.Drafts", "Drafts", "Taslaklar"], "Drafts");
 const findSentFolder = (c: ImapFlow) =>
   findSpecialFolder(
     c,
     "\\Sent",
     ["INBOX.Sent", "Sent", "Sent Items", "Gönderilmiş Öğeler", "Giden"],
-    "Gönderilenler"
+    "Sent"
   );
 const findTrashFolder = (c: ImapFlow) =>
   findSpecialFolder(
     c,
     "\\Trash",
     ["INBOX.Trash", "Trash", "Deleted Items", "Çöp Kutusu", "Silinmiş"],
-    "Çöp kutusu"
+    "Trash"
   );
 const findJunkFolder = (c: ImapFlow) =>
   findSpecialFolder(c, "\\Junk", ["INBOX.spam", "INBOX.Junk", "Junk", "Spam"], "Spam");
 const findArchiveFolder = (c: ImapFlow) =>
-  findSpecialFolder(c, "\\Archive", ["INBOX.Archive", "Archive", "Arşiv"], "Arşiv");
+  findSpecialFolder(c, "\\Archive", ["INBOX.Archive", "Archive", "Arşiv"], "Archive");
 
 // Raw source -> decoded headers, text, html and attachment metadata. The old
 // "slice off everything before the first blank line" approach handed back
@@ -225,7 +225,7 @@ async function moveMessage(
     const lock = await c.getMailboxLock(folder);
     try {
       await c.messageMove(String(uid), dest, { uid: true });
-      return ok(`uid ${uid} taşındı: ${folder} → ${dest}`);
+      return ok(`uid ${uid} moved: ${folder} → ${dest}`);
     } finally {
       lock.release();
     }
@@ -243,9 +243,9 @@ function addrList(v: any): string {
 
 function quoteBody(parsed: any): string {
   const when = parsed.date ? parsed.date.toISOString().slice(0, 16).replace("T", " ") : "";
-  const who = addrList(parsed.from) || "gönderen";
+  const who = addrList(parsed.from) || "the sender";
   const body = (parsed.text ?? "").split("\n").map((l: string) => `> ${l}`).join("\n");
-  return `\n\n${when} tarihinde ${who} yazdı:\n${body}`;
+  return `\n\nOn ${when}, ${who} wrote:\n${body}`;
 }
 
 // Keep the thread intact: without In-Reply-To/References, mail clients show the
@@ -265,9 +265,9 @@ async function appendToSent(raw: Buffer | string) {
       const sent = await findSentFolder(c);
       await c.append(sent, Buffer.isBuffer(raw) ? raw : Buffer.from(raw, "utf8"), ["\\Seen"]);
     });
-    return " Gönderilenler'e kaydedildi.";
+    return " Saved to Sent.";
   } catch {
-    return " (Gönderilenler'e kaydedilemedi.)";
+    return " (Could not save to Sent.)";
   }
 }
 
@@ -286,7 +286,7 @@ async function sendAndFile(mail: any) {
   const raw: Buffer = await compiled.build();
   const info = await smtp.sendMail({ envelope, raw } as Parameters<typeof smtp.sendMail>[0]);
   const filed = await appendToSent(raw);
-  return `Gönderildi. messageId=${info.messageId}${filed}`;
+  return `Sent. messageId=${info.messageId}${filed}`;
 }
 
 const smtp = nodemailer.createTransport({
@@ -801,16 +801,16 @@ async function handle(name: string, args: any) {
 
     case "get_message": {
       const parsed = await fetchParsed(args.uid, args.folder ?? "INBOX");
-      if (!parsed) return ok("(mesaj bulunamadı)");
+      if (!parsed) return ok("(message not found)");
       const atts = parsed.attachments ?? [];
       const header =
-        `Gönderen: ${addrList(parsed.from) || "?"}\n` +
-        `Alıcı: ${addrList(parsed.to) || "?"}\n` +
+        `From: ${addrList(parsed.from) || "?"}\n` +
+        `To: ${addrList(parsed.to) || "?"}\n` +
         (addrList(parsed.cc) ? `Cc: ${addrList(parsed.cc)}\n` : "") +
-        `Tarih: ${parsed.date?.toISOString?.() ?? "?"}\n` +
-        `Konu: ${parsed.subject ?? "(konu yok)"}\n` +
+        `Date: ${parsed.date?.toISOString?.() ?? "?"}\n` +
+        `Subject: ${parsed.subject ?? "(no subject)"}\n` +
         (atts.length
-          ? `Ekler: ${atts.map((a: any) => a.filename ?? "(isimsiz)").join(", ")}\n`
+          ? `Attachments: ${atts.map((a: any) => a.filename ?? "(unnamed)").join(", ")}\n`
           : "") +
         `\n`;
       // text is the decoded plain-text part; fall back to stripping the HTML
@@ -837,7 +837,7 @@ async function handle(name: string, args: any) {
     case "reply_message": {
       const folder = args.folder ?? "INBOX";
       const parsed = await fetchParsed(args.uid, folder);
-      if (!parsed) return ok("(mesaj bulunamadı)");
+      if (!parsed) return ok("(message not found)");
 
       const me = CFG.imap.user.toLowerCase();
       const from = addrList(parsed.from);
@@ -875,23 +875,23 @@ async function handle(name: string, args: any) {
           lock.release();
         }
       }).catch(() => {});
-      return ok(`${res} Alıcı: ${to}${cc ? ` | Cc: ${cc}` : ""}`);
+      return ok(`${res} To: ${to}${cc ? ` | Cc: ${cc}` : ""}`);
     }
 
     case "forward_message": {
       const folder = args.folder ?? "INBOX";
       const parsed = await fetchParsed(args.uid, folder);
-      if (!parsed) return ok("(mesaj bulunamadı)");
+      if (!parsed) return ok("(message not found)");
 
       const subject = /^(fwd|fw):/i.test(parsed.subject ?? "")
         ? parsed.subject
         : `Fwd: ${parsed.subject ?? ""}`;
       const header =
-        `\n\n---------- İletilen mesaj ----------\n` +
-        `Gönderen: ${addrList(parsed.from)}\n` +
-        `Tarih: ${parsed.date?.toISOString?.() ?? ""}\n` +
-        `Konu: ${parsed.subject ?? ""}\n` +
-        `Alıcı: ${addrList(parsed.to)}\n\n`;
+        `\n\n---------- Forwarded message ----------\n` +
+        `From: ${addrList(parsed.from)}\n` +
+        `Date: ${parsed.date?.toISOString?.() ?? ""}\n` +
+        `Subject: ${parsed.subject ?? ""}\n` +
+        `To: ${addrList(parsed.to)}\n\n`;
 
       return ok(
         await sendAndFile({
@@ -933,11 +933,11 @@ async function handle(name: string, args: any) {
           if (args.flagged === false) del.push("\\Flagged");
           if (args.answered === true) add.push("\\Answered");
           if (args.answered === false) del.push("\\Answered");
-          if (!add.length && !del.length) return ok("(değiştirilecek bir şey belirtilmedi)");
+          if (!add.length && !del.length) return ok("(nothing to change was specified)");
           const uid = String(args.uid);
           if (add.length) await c.messageFlagsAdd(uid, add, { uid: true });
           if (del.length) await c.messageFlagsRemove(uid, del, { uid: true });
-          return ok(`uid ${args.uid} güncellendi. Eklenen: ${add.join(" ") || "-"}, kaldırılan: ${del.join(" ") || "-"}`);
+          return ok(`uid ${args.uid} updated. Added: ${add.join(" ") || "-"}, removed: ${del.join(" ") || "-"}`);
         } finally {
           lock.release();
         }
@@ -945,9 +945,9 @@ async function handle(name: string, args: any) {
 
     case "list_attachments": {
       const parsed = await fetchParsed(args.uid, args.folder ?? "INBOX");
-      if (!parsed) return ok("(mesaj bulunamadı)");
+      if (!parsed) return ok("(message not found)");
       const atts = parsed.attachments ?? [];
-      if (!atts.length) return ok("(ek yok)");
+      if (!atts.length) return ok("(no attachments)");
       return ok(
         atts
           .map((a: any) => `${a.filename ?? "(isimsiz)"}  —  ${a.contentType}  —  ${a.size} bayt`)
@@ -957,27 +957,27 @@ async function handle(name: string, args: any) {
 
     case "save_attachment": {
       const parsed = await fetchParsed(args.uid, args.folder ?? "INBOX");
-      if (!parsed) return ok("(mesaj bulunamadı)");
+      if (!parsed) return ok("(message not found)");
       const att = (parsed.attachments ?? []).find((a: any) => a.filename === args.filename);
-      if (!att) return ok(`(ek bulunamadı: ${args.filename})`);
+      if (!att) return ok(`(attachment not found: ${args.filename})`);
       const dir = args.directory ?? join(homedir(), "Downloads");
       mkdirSync(dir, { recursive: true });
       // basename() so a crafted filename cannot escape the chosen directory.
       const dest = join(dir, basename(String(args.filename)));
       writeFileSync(dest, att.content);
-      return ok(`Kaydedildi: ${dest}`);
+      return ok(`Saved: ${dest}`);
     }
 
     case "create_folder":
       return withImap(async (c) => {
         await c.mailboxCreate(args.name);
-        return ok(`Klasör oluşturuldu: ${args.name}`);
+        return ok(`Folder created: ${args.name}`);
       });
 
     case "rename_folder":
       return withImap(async (c) => {
         await c.mailboxRename(args.from, args.to);
-        return ok(`Klasör yeniden adlandırıldı: ${args.from} → ${args.to}`);
+        return ok(`Folder renamed: ${args.from} → ${args.to}`);
       });
 
     case "delete_folder":
@@ -985,10 +985,10 @@ async function handle(name: string, args: any) {
         // Refuse the folders the mailbox cannot function without.
         const protectedBoxes = ["inbox"];
         if (protectedBoxes.includes(String(args.name).toLowerCase())) {
-          return ok(`${args.name} silinemez.`);
+          return ok(`${args.name} cannot be deleted.`);
         }
         await c.mailboxDelete(args.name);
-        return ok(`Klasör silindi: ${args.name}`);
+        return ok(`Folder deleted: ${args.name}`);
       });
 
     case "empty_trash":
@@ -997,9 +997,9 @@ async function handle(name: string, args: any) {
         const lock = await c.getMailboxLock(trash);
         try {
           const status = await c.status(trash, { messages: true });
-          if (!status.messages) return ok(`${trash} zaten boş.`);
+          if (!status.messages) return ok(`${trash} is already empty.`);
           await c.messageDelete({ all: true });
-          return ok(`${trash} boşaltıldı (${status.messages} mesaj kalıcı olarak silindi).`);
+          return ok(`${trash} emptied (${status.messages} messages permanently deleted).`);
         } finally {
           lock.release();
         }
@@ -1064,7 +1064,7 @@ async function handle(name: string, args: any) {
             // The UID is what update_event/delete_event need as their handle.
             out.push(
               `${v.startDate?.toString() ?? "?"} → ${v.endDate?.toString() ?? "?"}  ${
-                v.summary ?? "(başlıksız)"
+                v.summary ?? "(untitled)"
               }${v.location ? `  @ ${v.location}` : ""}  [uid ${v.uid}]`
             );
           }
@@ -1072,7 +1072,7 @@ async function handle(name: string, args: any) {
           /* skip unparseable */
         }
       }
-      return ok(out.sort().join("\n") || "(bu aralıkta etkinlik yok)");
+      return ok(out.sort().join("\n") || "(no events in this range)");
     }
 
     case "update_event":
@@ -1080,22 +1080,22 @@ async function handle(name: string, args: any) {
       const { headers } = await getDav();
       const cals = await getCalendars();
       const target = pickCalendar(cals, args.calendarUrl);
-      if (!target) return ok("(takvim bulunamadı)");
+      if (!target) return ok("(calendar not found)");
 
       const objs = await fetchCalendarObjects({ calendar: target, headers });
       const hit = objs.find((o: any) => o.data && o.data.includes(`UID:${args.uid}`));
-      if (!hit) return ok(`(etkinlik bulunamadı: ${args.uid})`);
+      if (!hit) return ok(`(event not found: ${args.uid})`);
 
       if (name === "delete_event") {
         await deleteCalendarObject({ calendarObject: hit, headers });
-        return ok(`Etkinlik silindi: ${args.uid}`);
+        return ok(`Event deleted: ${args.uid}`);
       }
 
       // Edit the existing VEVENT in place so fields we were not given keep
       // their current values.
       const comp = new ICAL.Component(ICAL.parse(hit.data!));
       const vevent = comp.getAllSubcomponents("vevent")[0];
-      if (!vevent) return ok("(etkinlik okunamadı)");
+      if (!vevent) return ok("(could not read event)");
       const setProp = (k: string, val?: string) => {
         if (val === undefined) return;
         vevent.updatePropertyWithValue(k, val);
@@ -1111,7 +1111,7 @@ async function handle(name: string, args: any) {
         calendarObject: { ...hit, data: comp.toString() },
         headers,
       });
-      return ok(`Etkinlik güncellendi: ${args.uid}`);
+      return ok(`Event updated: ${args.uid}`);
     }
 
     case "create_event": {
